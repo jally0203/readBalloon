@@ -1,0 +1,45 @@
+name: Build Windows EXE
+
+# 當 push 到 main 或 master 分支時自動觸發
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest  # 使用 GitHub 提供的 Windows 虛擬機
+
+    steps:
+      # 1. 檢出 (Checkout) 你的程式碼
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 安裝 Python 3.12 環境
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 3. 安裝專案依賴套件與 PyInstaller
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # 如果你的專案有 requirements.txt，取消下一行的註解：
+          # if (Test-Path requirements.txt) { pip install -r requirements.txt }
+
+      # 4. 使用 PyInstaller 進行打包
+      - name: Build EXE with PyInstaller
+        run: |
+          # 請將 main.py 改為你的 Python 入口主程式檔名
+          # --onefile 打包成單一 exe, --noconsole 隱藏 Terminal 視窗 (若是 GUI 程式)
+          pyinstaller --onefile --clean readBalloon_v403.py
+
+      # 5. 上傳編譯出來的 exe 檔至 GitHub Artifacts (可在 GitHub 網頁下載)
+      - name: Upload EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Executable
+          path: dist/*.exe
