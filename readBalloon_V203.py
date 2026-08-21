@@ -72,6 +72,7 @@ def audit_file(file_path, cfg):
         rot = entity.dxf.rotation
         content = entity.plain_text().strip() if entity.dxftype() == 'MTEXT' else entity.dxf.text.strip()
         if content.isdigit() and entity.dxf.color == cfg['COLOR']:
+        # if content.isdigit() :
             balloons.append({'id': int(content), 'x': round(entity.dxf.insert.x, 3), 
                              'y': round(entity.dxf.insert.y, 3), 'rot': round(rot, 2), 
                              'used': False, 'note': "SINGLE"})
