@@ -28,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller
           # 如果你的專案有 requirements.txt，取消下一行的註解：
-          # if (Test-Path requirements.txt) { pip install -r requirements.txt }
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
       # 4. 使用 PyInstaller 進行打包
       - name: Build EXE with PyInstaller
