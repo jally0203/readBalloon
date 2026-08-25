@@ -35,7 +35,7 @@ jobs:
         run: |
           # 請將 main.py 改為你的 Python 入口主程式檔名
           # --onefile 打包成單一 exe, --noconsole 隱藏 Terminal 視窗 (若是 GUI 程式)
-          pyinstaller --onefile --clean --hidden-import=ezdxf readBalloon_v404.py
+          pyinstaller --onefile --clean --hidden-import=ezdxf readBalloon_v405.py
 
       # 5. 上傳編譯出來的 exe 檔至 GitHub Artifacts (可在 GitHub 網頁下載)
       - name: Upload EXE Artifact
