@@ -12,7 +12,7 @@ jobs:
     runs-on: windows-latest  # 使用 GitHub 提供的 Windows 虛擬機
 
     steps:
-      # 1. 檢出 (Checkout) 你的程式碼
+      # 1. 檢出 (Checkout) 程式碼
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -22,37 +22,49 @@ jobs:
         with:
           python-version: '3.12'
 
-      # 3. 安裝專案依賴套件與 PyInstaller
-      - name: Install dependencies
+      # 3. 安裝依賴套件至獨立 venv
+      - name: Install dependencies inside venv
         run: |
-        # 1. 建立獨立的虛擬環境 (避免打包到 Runner 預裝的大量無關套件)
-        python -m venv venv
-        .\venv\Scripts\activate
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --upgrade pip
+          .\venv\Scripts\pip.exe install pyinstaller
+          
+          if (Test-Path requirements.txt) { 
+              .\venv\Scripts\pip.exe install -r requirements.txt 
+          } else {
+              .\venv\Scripts\pip.exe install ezdxf
+          }
 
-        # 2. 升級 pip 並安裝基本打包工具
-        python -m pip install --upgrade pip
-        pip install pyinstaller
+          # 卸載隱式拉進來的大型套件
+          .\venv\Scripts\pip.exe uninstall -y numpy matplotlib scipy pillow pandas fonttools
 
-        # 3. 如果有 requirements.txt 就安裝，沒有的話自動補充安裝 ezdxf
-        if (Test-Path requirements.txt) { 
-            pip install -r requirements.txt 
-        } else {
-            pip install ezdxf
-        }
-
-        # 4. 強制卸載可能被隱式拉進來的大型無關套件 (進一步瘦身)
-        pip uninstall -y numpy matplotlib scipy pillow pandas
-
-      # 4. 使用 PyInstaller 進行打包
+      # 4. 使用 venv 內的 PyInstaller 打包 (包含模組排除)
       - name: Build EXE with PyInstaller
         run: |
-          # 請將 main.py 改為你的 Python 入口主程式檔名
-          # --onefile 打包成單一 exe, --noconsole 隱藏 Terminal 視窗 (若是 GUI 程式)
-          pyinstaller --onefile --clean --hidden-import=ezdxf readBalloon_v405.py
+          # 關鍵：直接指定 venv 裡面的 pyinstaller.exe，確保只打包 venv 的套件！
+          .\venv\Scripts\pyinstaller.exe --noconfirm --onedir --clean `
+            --name "readBalloon" `
+            --exclude-module tkinter `
+            --exclude-module matplotlib `
+            --exclude-module numpy `
+            --exclude-module scipy `
+            --exclude-module PIL `
+            --exclude-module pandas `
+            --exclude-module fonttools `
+            --exclude-module unittest `
+            --exclude-module xml `
+            --exclude-module email `
+            --exclude-module http `
+            readBalloon_v405.py
 
-      # 5. 上傳編譯出來的 exe 檔至 GitHub Artifacts (可在 GitHub 網頁下載)
-      - name: Upload EXE Artifact
+      # 5. 將打包出的資料夾壓縮成 ZIP (壓縮率最高，下載體積最小)
+      - name: Compress Output Folder
+        run: |
+          Compress-Archive -Path dist/readBalloon/* -DestinationPath readBalloon_Windows.zip
+
+      # 6. 上傳 ZIP 檔至 GitHub Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-Executable
-          path: dist/*.exe
+          name: readBalloon-Windows-ZIP
+          path: readBalloon_Windows.zip
