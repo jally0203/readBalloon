@@ -25,23 +25,10 @@ jobs:
       # 3. 安裝專案依賴套件與 PyInstaller
       - name: Install dependencies
         run: |
-        # 1. 建立獨立的虛擬環境 (避免打包到 Runner 預裝的大量無關套件)
-        python -m venv venv
-        .\venv\Scripts\activate
-
-        # 2. 升級 pip 並安裝基本打包工具
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-
-        # 3. 如果有 requirements.txt 就安裝，沒有的話自動補充安裝 ezdxf
-        if (Test-Path requirements.txt) { 
-            pip install -r requirements.txt 
-        } else {
-            pip install ezdxf
-        }
-
-        # 4. 強制卸載可能被隱式拉進來的大型無關套件 (進一步瘦身)
-        pip uninstall -y numpy matplotlib scipy pillow pandas
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # 如果你的專案有 requirements.txt，取消下一行的註解：
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
 
       # 4. 使用 PyInstaller 進行打包
       - name: Build EXE with PyInstaller
