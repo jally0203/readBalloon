@@ -5,8 +5,10 @@ import re
 import ezdxf
 from ezdxf.math import Vec3, Matrix44
 
-DEBUG = False  #是否要印出debue資訊
+DEBUG = True  #是否要印出debue資訊
 OUTPUT_CSV = True  #同時輸出成CSV 
+DEBUG_BALL_ID = 141   # 察看特定球標配對情形，0 = disable
+_debugEnable_ = False  # 不要修改，指定DEBUG_BALL_ID後自動啟用
 
 # ==========================================
 # 1. 設定檔讀取與 DXF 文字清理
@@ -67,11 +69,25 @@ def clean_dxf_text(raw_text):
     text = text.replace("%%%%", "%")
     return text.strip()
 
-def find_entities_in_layout(layout, doc, target_color, transform=Matrix44(), parent_color=None, balloons=None, dim_texts=None):
+import math
+
+
+def find_entities_in_layout(
+    layout,
+    doc,
+    target_color,
+    transform=Matrix44(),
+    parent_color=None,
+    balloons=None,
+    dim_texts=None,
+    dimensions=None,
+):
     if balloons is None:
         balloons = []
     if dim_texts is None:
         dim_texts = []
+    if dimensions is None:
+        dimensions = []
 
     for entity in layout:
         dxftype = entity.dxftype()
@@ -79,73 +95,183 @@ def find_entities_in_layout(layout, doc, target_color, transform=Matrix44(), par
         # ==========================================
         # 1. 處理 TEXT / MTEXT
         # ==========================================
-        if dxftype in ('TEXT', 'MTEXT'):
-            raw_text = entity.plain_text() if dxftype == 'MTEXT' else entity.dxf.text
+        if dxftype in ("TEXT", "MTEXT"):
+            raw_text = (
+                entity.plain_text()
+                if dxftype == "MTEXT"
+                else entity.dxf.text
+            )
             content = clean_dxf_text(raw_text)
             if not content:
                 continue
 
             eff_color = get_effective_color(entity, doc, parent_color)
-            
-            local_insert = entity.dxf.align_point if entity.dxf.hasattr('align_point') and entity.dxf.align_point != (0,0,0) else entity.dxf.insert
-            local_rot = entity.dxf.rotation if entity.dxf.hasattr('rotation') else 0.0
-            
+
+            local_insert = (
+                entity.dxf.align_point
+                if entity.dxf.hasattr("align_point")
+                and entity.dxf.align_point != (0, 0, 0)
+                else entity.dxf.insert
+            )
+            local_rot = (
+                entity.dxf.rotation if entity.dxf.hasattr("rotation") else 0.0
+            )
+
             wcs_insert = transform.transform(local_insert)
-            v_rot = transform.transform_direction(Vec3.from_deg_angle(local_rot))
+            v_rot = transform.transform_direction(
+                Vec3.from_deg_angle(local_rot)
+            )
             wcs_rot = math.degrees(math.atan2(v_rot.y, v_rot.x)) % 360.0
 
             # Balloon 條件過濾
             if content.isdigit() and eff_color == target_color:
                 balloons.append({
-                    'id': int(content),
-                    'x': round(wcs_insert.x, 3),
-                    'y': round(wcs_insert.y, 3),
-                    'rot': round(wcs_rot, 2),
+                    "id": int(content),
+                    "x": round(wcs_insert.x, 3),
+                    "y": round(wcs_insert.y, 3),
+                    "rot": round(wcs_rot, 2),
                 })
             else:
                 dim_texts.append({
-                    'text': content,
-                    'x': round(wcs_insert.x, 3),
-                    'y': round(wcs_insert.y, 3),
-                    'rot': round(wcs_rot, 2),
-                    'color': eff_color,
-                    'handle': entity.dxf.handle if entity.dxf.hasattr('handle') else None,
-                    'style_name': entity.dxf.style if entity.dxf.hasattr('style') else 'STANDARD'
+                    "text": content,
+                    "x": round(wcs_insert.x, 3),
+                    "y": round(wcs_insert.y, 3),
+                    "rot": round(wcs_rot, 2),
+                    "color": eff_color,
+                    "handle": entity.dxf.handle
+                    if entity.dxf.hasattr("handle")
+                    else None,
+                    "style_name": entity.dxf.style
+                    if entity.dxf.hasattr("style")
+                    else "STANDARD",
                 })
 
         # ==========================================
-        # 2. 處理 DIMENSION (尺寸標註 - 不遞迴內部 Block 以避免重複抓取)
+        # 2. 處理 DIMENSION (尺寸標註)
         # ==========================================
-        elif dxftype == 'DIMENSION':
+        elif dxftype == "DIMENSION":
             eff_color = get_effective_color(entity, doc, parent_color)
-            
-            # --- 解析 DIMENSION 物件本體 ---
-            override_text = clean_dxf_text(entity.dxf.text) if entity.dxf.hasattr('text') else ""
-            pos = entity.dxf.text_midpoint if entity.dxf.hasattr('text_midpoint') and entity.dxf.text_midpoint != (0,0,0) else entity.dxf.defpoint
+
+            # --- 解析 基本屬性 與 位置 ---
+            override_text = (
+                clean_dxf_text(entity.dxf.text)
+                if entity.dxf.hasattr("text")
+                else ""
+            )
+            pos = (
+                entity.dxf.text_midpoint
+                if entity.dxf.hasattr("text_midpoint")
+                and entity.dxf.text_midpoint != (0, 0, 0)
+                else entity.dxf.defpoint
+            )
             wcs_pos = transform.transform(pos)
 
-            dim_handle = entity.dxf.handle if entity.dxf.hasattr('handle') else None
-            dim_style = entity.dxf.dimstyle if entity.dxf.hasattr('dimstyle') else 'STANDARD'
+            dim_handle = (
+                entity.dxf.handle if entity.dxf.hasattr("handle") else None
+            )
+            dim_style = (
+                entity.dxf.dimstyle
+                if entity.dxf.hasattr("dimstyle")
+                else "STANDARD"
+            )
 
-            # 1. 讀取測量值
-            measurement = entity.get_measurement() if hasattr(entity, 'get_measurement') else None
-            meas_str = f"{measurement:.2f}" if (measurement is not None and measurement > 0) else ""
+            # --- 定義點座標 (WCS) ---
+            defpoint = (
+                transform.transform(entity.dxf.defpoint)
+                if entity.dxf.hasattr("defpoint")
+                else None
+            )
+            defpoint2 = (
+                transform.transform(entity.dxf.defpoint2)
+                if entity.dxf.hasattr("defpoint2")
+                else None
+            )
+            defpoint3 = (
+                transform.transform(entity.dxf.defpoint3)
+                if entity.dxf.hasattr("defpoint3")
+                else None
+            )
 
-            # 2. 讀取公差 (優先物件屬性，其次 DimStyle)
-            tol_plus = entity.dxf.get('dimtp', None) if entity.dxf.hasattr('dimtp') else None
-            tol_minus = entity.dxf.get('dimtm', None) if entity.dxf.hasattr('dimtm') else None
+            # ---------------------------------------------------------
+            # 1. 讀取幾何測量值與比例因子 (DIMLFAC)，並根據 dimtype 計算 CAD 實際顯示值
+            # ---------------------------------------------------------
+            geom_measurement = (
+                entity.dxf.get("actual_measurement", None)
+                if entity.dxf.hasattr("actual_measurement")
+                else (
+                    entity.get_measurement()
+                    if hasattr(entity, "get_measurement")
+                    else None
+                )
+            )
 
-            if (tol_plus is None or tol_minus is None) and dim_style in doc.dimstyles:
+            scale_factor = 1.0
+            if entity.dxf.hasattr("dimlfac"):
+                scale_factor = entity.dxf.dimlfac
+            elif dim_style in doc.dimstyles:
+                dimstyle_obj = doc.dimstyles.get(dim_style)
+                if dimstyle_obj and dimstyle_obj.dxf.hasattr("dimlfac"):
+                    scale_factor = dimstyle_obj.dxf.dimlfac
+
+            if scale_factor == 0:
+                scale_factor = 1.0
+
+            # 取得 dimtype 屬性 (優先從 ezdxf 物件讀取，沒有則預設 0)
+            dimtype = (
+                entity.dimtype
+                if hasattr(entity, "dimtype")
+                else entity.dxf.get("dimtype", 0)
+            )
+            core_type = (
+                dimtype & 7 if dimtype is not None else 0
+            )  # 提取核心標註類型 (遮罩 0x07)
+
+            cad_display_val = None
+            cad_display_str = ""
+
+            if geom_measurement is not None and geom_measurement >= 0:
+                # 角度標註：2 (Angular) 與 5 (Angular 3-Point)
+                if core_type in (2, 5):
+                    cad_display_val = math.degrees(geom_measurement)  # 弧度轉角度
+                    cad_display_str = f"{cad_display_val:.1f}"  # 角度習慣保留 1 位小數 (如 90.0)
+                else:
+                    # 一般長度標註：幾何測量值 / scale_factor
+                    #cad_display_val = geom_measurement / scale_factor
+                    cad_display_val = geom_measurement
+                    cad_display_str = f"{cad_display_val:.2f}"  # 長度習慣保留 2 位小數
+
+            # ---------------------------------------------------------
+            # 2. 讀取公差
+            # ---------------------------------------------------------
+            tol_plus = (
+                entity.dxf.get("dimtp", None)
+                if entity.dxf.hasattr("dimtp")
+                else None
+            )
+            tol_minus = (
+                entity.dxf.get("dimtm", None)
+                if entity.dxf.hasattr("dimtm")
+                else None
+            )
+
+            if (
+                tol_plus is None or tol_minus is None
+            ) and dim_style in doc.dimstyles:
                 dimstyle_obj = doc.dimstyles.get(dim_style)
                 if dimstyle_obj:
-                    has_tol = dimstyle_obj.dxf.get('dimtol', 0) or dimstyle_obj.dxf.get('dimlim', 0)
+                    has_tol = dimstyle_obj.dxf.get(
+                        "dimtol", 0
+                    ) or dimstyle_obj.dxf.get("dimlim", 0)
                     if has_tol:
-                        if tol_plus is None and dimstyle_obj.dxf.hasattr('dimtp'):
+                        if tol_plus is None and dimstyle_obj.dxf.hasattr(
+                            "dimtp"
+                        ):
                             tol_plus = dimstyle_obj.dxf.dimtp
-                        if tol_minus is None and dimstyle_obj.dxf.hasattr('dimtm'):
+                        if tol_minus is None and dimstyle_obj.dxf.hasattr(
+                            "dimtm"
+                        ):
                             tol_minus = dimstyle_obj.dxf.dimtm
 
-            # 組合公差字串
             tol_str = ""
             if tol_plus is not None and tol_minus is not None:
                 tp = float(tol_plus)
@@ -156,73 +282,147 @@ def find_entities_in_layout(layout, doc, target_color, transform=Matrix44(), par
                     else:
                         tol_str = f"(+{tp:.2f}/-{abs(tm):.2f})"
 
-            # 3. 組合最終字串
+# ---------------------------------------------------------
+            # 3. 組合文字內容 (替換 <> 佔位符)
+            # ---------------------------------------------------------
+            # 判斷是否為角度標註 (2 與 5)
+            is_angular = core_type in (2, 5)
+            deg_symbol = "°" if is_angular else ""
+
             if override_text:
                 if "<>" in override_text:
-                    final_dim_text = f"{override_text}#{meas_str}{tol_str}"
+                    # 情形 1：有手動覆寫且保留 <> (例如 "2X <>")
+                    # 產出例如："2X <>#90.0°±1.00"
+                    final_dim_text = (
+                        f"{override_text}#{cad_display_str}{deg_symbol}{tol_str}"
+                    )
                 else:
+                    # 情形 2：硬改文字且抹除 <> (例如 "TYP.")
+                    # 產出例如："TYP.±1.00"
                     final_dim_text = f"{override_text}{tol_str}"
             else:
-                final_dim_text = f"<>#{meas_str}{tol_str}"
+                # 情形 3：完全無手動覆寫 (CAD 預設)
+                # 產出例如："<>#90.0°±1.00"
+                final_dim_text = f"<>#{cad_display_str}{deg_symbol}{tol_str}{deg_symbol}"
 
+            # 寫入 dim_texts 串列
             if final_dim_text:
                 dim_texts.append({
-                    'text': final_dim_text,
-                    'x': round(wcs_pos.x, 3),
-                    'y': round(wcs_pos.y, 3),
-                    'rot': 0.0,
-                    'color': eff_color,
-                    'handle': dim_handle,
-                    'style_name': dim_style
+                    "text": final_dim_text,
+                    "x": round(wcs_pos.x, 3),
+                    "y": round(wcs_pos.y, 3),
+                    "rot": 0.0,
+                    "color": eff_color,
+                    "handle": dim_handle,
+                    "style_name": dim_style,
                 })
 
+            # ---------------------------------------------------------
+            # 4. 存入 dimensions 詳細變數
+            # ---------------------------------------------------------
+            dimensions.append({
+                "handle": dim_handle,
+                "dimstyle": dim_style,
+                "color": eff_color,
+                "dimtype": dimtype,
+                "raw_text": override_text,
+                "final_text": final_dim_text,
+                "cad_display_value": round(cad_display_val, 3)
+                if cad_display_val is not None
+                else None,
+                "geom_measurement": round(geom_measurement, 3)
+                if geom_measurement is not None
+                else None,
+                "scale_factor": scale_factor,
+                "tolerance": {
+                    "plus": float(tol_plus) if tol_plus is not None else 0.0,
+                    "minus": float(tol_minus) if tol_minus is not None else 0.0,
+                    "text": tol_str,
+                },
+                "text_position": {
+                    "x": round(wcs_pos.x, 3),
+                    "y": round(wcs_pos.y, 3),
+                },
+                "defpoints": {
+                    "defpoint": (
+                        round(defpoint.x, 3),
+                        round(defpoint.y, 3),
+                    )
+                    if defpoint
+                    else None,
+                    "defpoint2": (
+                        round(defpoint2.x, 3),
+                        round(defpoint2.y, 3),
+                    )
+                    if defpoint2
+                    else None,
+                    "defpoint3": (
+                        round(defpoint3.x, 3),
+                        round(defpoint3.y, 3),
+                    )
+                    if defpoint3
+                    else None,
+                },
+            })
+
         # ==========================================
-        # 3. 處理 INSERT (圖塊引用 + 屬性文字提取)
+        # 3. 處理 INSERT (圖塊引用 + 遞迴)
         # ==========================================
-        elif dxftype == 'INSERT':
+        elif dxftype == "INSERT":
             insert_color = get_effective_color(entity, doc, parent_color)
             insert_matrix = entity.matrix44()
             combined_transform = insert_matrix * transform
 
-            # A. 提取 Block 的屬性文字 (ATTRIB，如 Balloon 號碼)
-            if hasattr(entity, 'attribs'):
+            if hasattr(entity, "attribs"):
                 for attrib in entity.attribs:
                     attr_text = clean_dxf_text(attrib.dxf.text)
                     if not attr_text:
                         continue
-                    
-                    attr_color = get_effective_color(attrib, doc, insert_color)
-                    wcs_attr_pos = combined_transform.transform(attrib.dxf.insert)
+
+                    attr_color = get_effective_color(
+                        attrib, doc, insert_color
+                    )
+                    wcs_attr_pos = combined_transform.transform(
+                        attrib.dxf.insert
+                    )
 
                     if attr_text.isdigit() and attr_color == target_color:
                         balloons.append({
-                            'id': int(attr_text),
-                            'x': round(wcs_attr_pos.x, 3),
-                            'y': round(wcs_attr_pos.y, 3),
-                            'rot': 0.0,
+                            "id": int(attr_text),
+                            "x": round(wcs_attr_pos.x, 3),
+                            "y": round(wcs_attr_pos.y, 3),
+                            "rot": 0.0,
                         })
                     else:
                         dim_texts.append({
-                            'text': attr_text,
-                            'x': round(wcs_attr_pos.x, 3),
-                            'y': round(wcs_attr_pos.y, 3),
-                            'rot': 0.0,
-                            'color': attr_color,
-                            'handle': attrib.dxf.handle if attrib.dxf.hasattr('handle') else None,
-                            'style_name': attrib.dxf.style if attrib.dxf.hasattr('style') else 'STANDARD'
+                            "text": attr_text,
+                            "x": round(wcs_attr_pos.x, 3),
+                            "y": round(wcs_attr_pos.y, 3),
+                            "rot": 0.0,
+                            "color": attr_color,
+                            "handle": attrib.dxf.handle
+                            if attrib.dxf.hasattr("handle")
+                            else None,
+                            "style_name": attrib.dxf.style
+                            if attrib.dxf.hasattr("style")
+                            else "STANDARD",
                         })
 
-            # B. 遞迴圖塊內部圖元
             block_name = entity.dxf.name
             if block_name in doc.blocks:
                 block = doc.blocks[block_name]
                 find_entities_in_layout(
-                    layout=block, doc=doc, target_color=target_color,
-                    transform=combined_transform, parent_color=insert_color,
-                    balloons=balloons, dim_texts=dim_texts
+                    layout=block,
+                    doc=doc,
+                    target_color=target_color,
+                    transform=combined_transform,
+                    parent_color=insert_color,
+                    balloons=balloons,
+                    dim_texts=dim_texts,
+                    dimensions=dimensions,
                 )
 
-    return balloons, dim_texts
+    return balloons, dim_texts, dimensions
 
 # ==========================================
 # 3. 幾何約束檢查與尺寸匹配
@@ -234,24 +434,29 @@ def calc_rot_diff(r1, r2):
     diff = abs(r1 - r2) % 360.0
     return min(diff, 360.0 - diff)
 
+# 計算2物件相對位置(dx, dy)轉到水平線的XY值  
+def calLocalXY(rot, dx, dy):  
+    rad = math.radians(rot)
+    cos_angle = math.cos(rad)
+    sin_angle = math.sin(rad)
+    ret_x = dx * cos_angle + dy * sin_angle
+    ret_y = -dx * sin_angle + dy * cos_angle
+    return ret_x, ret_y
+
 def is_valid_range_geometry(b1, b2, cfg):
-    dx = abs(b1['x'] - b2['x'])
-    dy = abs(b1['y'] - b2['y'])
-    dist = calc_distance(b1, b2)
-
-    if not (cfg['MIN_DIST'] <= dist <= cfg['MAX_DIST']):
-        return False
-
     if calc_rot_diff(b1['rot'], b2['rot']) > cfg.get('TOLERANCE_ROT', 2.0):
         return False
 
-    if abs(b1['rot'] - 0.0) < 5.0 or abs(b1['rot'] - 180.0) < 5.0:
-        if dy > cfg['ORTHO_TOL']:
-            return False
-    elif abs(b1['rot'] - 90.0) < 5.0 or abs(b1['rot'] - 270.0) < 5.0:
-        if dx > cfg['ORTHO_TOL']:
-            return False
+    dx = abs(b1['x'] - b2['x'])
+    dy = abs(b1['y'] - b2['y'])
+    local_x, local_y = calLocalXY(b1['rot'], dx, dy)
+    
+    if local_y > cfg['ORTHO_TOL']:
+        return False
 
+    if not (cfg['MIN_DIST'] <= local_x <= cfg['MAX_DIST']):
+        return False    
+    
     return True
 
 def find_closest_number_for_prefix(prefix_frag, all_dim_texts):
@@ -277,14 +482,12 @@ def find_closest_number_for_prefix(prefix_frag, all_dim_texts):
 
 def getPPKItems(dim_texts):
     return [item for item in dim_texts if item.get("text") == "PPK"]
-  
+   
 def findRightSideRect(bx, by, b_rot, dim_texts, rect, expected_prefix):
     width, height = rect
     half_h = height / 2.0
-    
-    rad = math.radians(b_rot)
-    cos_angle = math.cos(rad)
-    sin_angle = math.sin(rad)
+    if _debugEnable_:
+        print(f'  - matching balloon (x, y, rot) = ({bx}, {by}, {b_rot})')
     
     # 先將符合字串前綴的項目與其轉換後的局部座標預先計算出來
     candidates = []
@@ -297,21 +500,30 @@ def findRightSideRect(bx, by, b_rot, dim_texts, rect, expected_prefix):
             dy = py - by
             
             # 逆向旋轉 -b_rot 角度（轉換至 0 度局部座標系）
-            local_x =  dx * cos_angle + dy * sin_angle
-            local_y = -dx * sin_angle + dy * cos_angle
-            
+            local_x, local_y =  calLocalXY(b_rot, dx, dy)            
+               
             # Y 軸範圍始終為 [-height/2, height/2]
             if -half_h <= local_y <= half_h:
                 candidates.append((local_x, text))
+                if _debugEnable_:
+                    print(f'  - candidate added: (x, y, text) = ({px}, {py}, {text})')
                 
     # 階段 1：搜尋右側 [0, width]
+    if _debugEnable_:
+        print(f'  - start find right side')        
     for local_x, text in candidates:
         if 0 <= local_x <= width:
+            if _debugEnable_:
+                print(f'    - found {text}, return')
             return True, text
             
     # 階段 2：右側找不到，改搜尋左側 [-width, 0]
+    if _debugEnable_:
+        print(f'  - start find left side')
     for local_x, text in candidates:
         if -width <= local_x <= 0:
+            if _debugEnable_:
+                print(f'    - found {text}, return')
             return True, text
             
     return False, None
@@ -319,7 +531,9 @@ def findRightSideRect(bx, by, b_rot, dim_texts, rect, expected_prefix):
 def findWindowClosest(bx, by, b_rot, dim_texts, max_match_dist, expected_prefix):
     closest_txt = None
     min_dist_sq = max_match_dist ** 2  # 使用距離平方比對，省去開根號計算
-    
+    if _debugEnable_:
+        print(f'  - matching balloon (x, y, rot) = ({bx}, {by}, {b_rot})')
+        
     for item in dim_texts:
         text = str(item.get("text", ""))
         
@@ -338,22 +552,20 @@ def findWindowClosest(bx, by, b_rot, dim_texts, max_match_dist, expected_prefix)
                 closest_txt = text
                 
     if closest_txt is not None:
+        if _debugEnable_:
+            print(f'    - found {closest_txt}, return')
         return True, closest_txt
         
     return False, None
   
 def findPPK(bx, by, b_rot, ppk_items, max_ppk_dist):
-    rad = math.radians(b_rot)
-    cos_angle = math.cos(rad)
-    sin_angle = math.sin(rad)
     
     for item in ppk_items:
         dx = item.get("x", 0) - bx
         dy = item.get("y", 0) - by
         
         # 將相對座標逆向旋轉 -b_rot 角度（適用於螢幕座標系 Y 軸向下）
-        local_x =  dx * cos_angle + dy * sin_angle
-        local_y = -dx * sin_angle + dy * cos_angle
+        local_x, local_y = calLocalXY(b_rot, dx, dy)
         
         # 無論 b_rot 是 0、18、45 還是 87.5 度，判斷範圍永遠不變
         if 0 <= local_x <= max_ppk_dist and -10 <= local_y <= 10:
@@ -378,15 +590,16 @@ def remove_mark(text):
     
 
 def match_range_dimension(current_item, dim_texts, ppk_items, cfg):
-       
+    global _debugEnable_ 
     start_id = current_item.get('start', current_item['id'])
     end_id = current_item.get('end', current_item['id'])
     balloon_count = abs(end_id - start_id) + 1
     
+    print(f'matching {start_id}~{end_id}')
     if balloon_count <= 1:
         return "N/A"
 
-    expected_prefix = f"{balloon_count}-<>"
+    expected_prefix = f"{balloon_count}-"
     bx, by = current_item['x'], current_item['y']
     b_rot = current_item.get('rot', 0.0) % 360.0
     MAX_MATCH_DIST = cfg.get('MAX_MATCH_DIST', 5.0)
@@ -395,25 +608,34 @@ def match_range_dimension(current_item, dim_texts, ppk_items, cfg):
     MAX_PPK_DIST = cfg.get('MAX_PPK_DIST', 5.0)
     
     is_ppk = findPPK(bx, by, b_rot, ppk_items, MAX_PPK_DIST)
-    return_text = "" if not is_ppk else "ppk, "
+    return_text = "" if not is_ppk else "ppk,"
     
-    rect = (MAX_RIGHT_SIDE_DIST, MAX_BOTTOM_SIDE_DIST)    
+    rect = (MAX_RIGHT_SIDE_DIST, MAX_BOTTOM_SIDE_DIST)
+    
+    if DEBUG_BALL_ID == end_id:
+        _debugEnable_ = True
+        print(f'ID {DEBUG_BALL_ID}: look inside findRightSideRect')
+    else:
+        _debugEnable_ = False
+       
     is_found, found_txt = findRightSideRect(bx, by, b_rot, dim_texts, rect, expected_prefix)
     if is_found:
-        return_text += found_txt
+        return_text += found_txt        
     else:
+        if _debugEnable_:
+            print(f'ID {DEBUG_BALL_ID}: look inside findWindowClosest')
         is_found, found_txt = findWindowClosest(bx, by, b_rot, dim_texts, MAX_MATCH_DIST, expected_prefix)
         if is_found:
-            return_text += found_txt
+            return_text += found_txt            
         else:
-            return_text += "N/A"
+            return_text += "not Found!"
     
     return_text = remove_mark(return_text)  # 移除 <> 及 # 符號     
     return return_text
 
 
 def match_single_dimension(current_item, dim_texts, ppk_items, cfg):
-       
+    global _debugEnable_
     start_id = current_item.get('start', current_item['id'])
     expected_prefix = f"<>"
     bx, by = current_item['x'], current_item['y']
@@ -426,16 +648,37 @@ def match_single_dimension(current_item, dim_texts, ppk_items, cfg):
     is_ppk = findPPK(bx, by, b_rot, ppk_items, MAX_PPK_DIST)
     return_text = "" if not is_ppk else "ppk, "
     
+    if DEBUG_BALL_ID == start_id:
+        _debugEnable_ = True
+        print(f'ID {DEBUG_BALL_ID}: look inside findRightSideRect')
+    else:
+        _debugEnable_ = False
+    
     rect = (MAX_RIGHT_SIDE_DIST, MAX_BOTTOM_SIDE_DIST)    
     is_found, found_txt = findRightSideRect(bx, by, b_rot, dim_texts, rect, expected_prefix)
     if is_found:
         return_text += found_txt
-    else:
+    else:    
+        if _debugEnable_:
+            print(f'ID {DEBUG_BALL_ID}: look inside findWindowClosest')
         is_found, found_txt = findWindowClosest(bx, by, b_rot, dim_texts, MAX_MATCH_DIST, expected_prefix)
         if is_found:
             return_text += found_txt
         else:
-            return_text += "N/AA"
+            return_text += "not Found!"
+    
+    # 找不到<>開頭可能是被手動修改
+    pos = return_text.find("not Found!")
+    if  pos >= 0:
+        return_text = return_text[0:pos]
+        if _debugEnable_:
+            print(f'ID {DEBUG_BALL_ID}: cannot find <>, replaced by none, look inside findWindowClosest again')
+        expected_prefix = ""
+        is_found, found_txt = findWindowClosest(bx, by, b_rot, dim_texts, MAX_MATCH_DIST, expected_prefix)
+        if is_found:
+            return_text += found_txt
+        else:
+            return_text += "not Found!"    
     
     return_text = remove_mark(return_text)  # 移除 <> 及 # 符號     
     return return_text
@@ -455,7 +698,7 @@ def audit_file(filepath, cfg):
         return
 
     msp = doc.modelspace()
-    raw_balloons, dim_texts = find_entities_in_layout(msp, doc, target_color=cfg['COLOR'])    
+    raw_balloons, dim_texts, dimensions = find_entities_in_layout(msp, doc, target_color=cfg['COLOR'])    
 
     if not raw_balloons:
         print("⚠ 未找到符合條件的球標文字。")
@@ -463,8 +706,14 @@ def audit_file(filepath, cfg):
           
     print(f"🔍 捕捉到 {len(raw_balloons)} 個數字球標，開始進行 SWAP 規則與物理距離配對...\n")
     if DEBUG:
-        print(raw_balloons) 
-        print(dim_texts) 
+        dfid = open('debug.txt', 'w', encoding='utf-8-sig')
+        dfid.write('\nballoon: ')
+        dfid.write(str(raw_balloons))
+        dfid.write('\ndim_texts: ')
+        dfid.write(str(dim_texts)) 
+        dfid.write('\ndimensions: ')
+        dfid.write(str(dimensions))
+        dfid.close()
 
     # 1. 進行範圍球標幾何配對
     range_pairs = []
@@ -519,9 +768,6 @@ def audit_file(filepath, cfg):
 
     # 4. 進行尺寸匹配 (區分 RANGE 與 SINGLE)
     ppk_items = getPPKItems(dim_texts)  
-    if DEBUG:
-        print("dim_texts中含有ppk項目如下:")
-        print(ppk_items)
     
     for item in final_list:
         if item['status'] == 'RANGE':
