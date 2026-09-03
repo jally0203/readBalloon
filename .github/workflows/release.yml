@@ -55,7 +55,7 @@ jobs:
             --exclude-module xml `
             --exclude-module email `
             --exclude-module http `
-            readBalloon_v405.py
+            readBalloon_v500.py
 
       # 5. 將打包出的資料夾壓縮成 ZIP (壓縮率最高，下載體積最小)
       - name: Compress Output Folder
